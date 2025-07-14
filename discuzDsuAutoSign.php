@@ -42,9 +42,9 @@ function getFormhash($res)
 }
 
 //签到代码
-$user = 'aicode'; //用户名
-$pwd = 'pi.#pJ23*ZUD*Pw'; //密码
-$baseUrl = 'https://www.aish123.vip/'; //论坛首页地址 结尾带上”/”
+$user = 'username'; //用户名
+$pwd = 'yourpassword'; //密码
+$baseUrl = 'https://www.example.com/'; //论坛首页地址 结尾带上”/”
 
 //心情：开心，难过，郁闷，无聊，怒，擦汗，奋斗，慵懒，衰
 //{"kx","ng","ym","wl","nu","ch","fd","yl","shuai"};
