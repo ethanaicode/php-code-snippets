@@ -1,5 +1,7 @@
 <?php
 // 针对的是DSU每日签到插件，路径是plugin.php?id=dsu_paulsign:sign，论坛一般用的都是这个插件
+// 推荐每日零点执行一次签到脚本 
+// 0 0 * * * php /path/to/your/script/discuzDsuAutoSign.php
 
 function curlGet($url, $use = false, $save = false, $referer = null, $post_data = null)
 {
