@@ -3,7 +3,20 @@
 // 推荐每日零点执行一次签到脚本 
 // 0 0 * * * php /path/to/your/script/discuzDsuAutoSign.php
 
-function curlGet($url, $use = false, $save = false, $referer = null, $post_data = null)
+$logDir = __DIR__ . '/runtime';
+if (!is_dir($logDir)) {
+    mkdir($logDir, 0755, true);
+}
+$logFile = $logDir . '/' . date('Y-m-d') . '.log';
+
+function writeLog(string $message)
+{
+    global $logFile;
+    $line = '[' . date('Y-m-d H:i:s') . '] ' . $message . PHP_EOL;
+    file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
+}
+
+function curlGet(string $url, bool $use = false, bool $save = false, ?string $referer = null, ?array $post_data = null)
 {
     global $cookie_file;
     $ch = curl_init($url);
@@ -28,11 +41,10 @@ function curlGet($url, $use = false, $save = false, $referer = null, $post_data 
         curl_setopt($ch, CURLOPT_POSTFIELDS, $post_data);
     }
     $content = curl_exec($ch);
-    curl_close($ch);
     return $content;
 }
 
-function getFormhash($res)
+function getFormhash(string $res): string
 {
     if (preg_match('/name="formhash" value="(.*?)"/i', $res, $matches)) {
         return $matches[1];
@@ -61,7 +73,21 @@ $signPageUrl = $baseUrl . 'plugin.php?id=dsu_paulsign:sign';
 $signSubmitUrl = $baseUrl . 'plugin.php?id=dsu_paulsign:sign&operation=qiandao&infloat=0&inajax=0';
 
 //存放Cookies的文件
-$cookie_file = tempnam('./temp', 'cookie');
+$cookie_file = tempnam($logDir, 'cookie');
+
+function cleanupCookieFile()
+{
+    global $cookie_file;
+    if (!empty($cookie_file) && file_exists($cookie_file)) {
+        unlink($cookie_file);
+        writeLog("清理cookie文件：{$cookie_file}");
+    }
+}
+
+// 注册脚本结束时的清理函数，确保cookie文件被删除
+register_shutdown_function('cleanupCookieFile');
+
+writeLog("开始执行签到，用户：{$user}，论坛：{$baseUrl}");
 
 //访问论坛登录页面，保存Cookies
 $res = curlGet($loginPageUrl, false, true);
@@ -81,11 +107,13 @@ $login_array = array(
 //携带cookie提交登录信息
 $res = curlGet($loginSubmitUrl, true, true, null, $login_array);
 if (strpos($res, '欢迎您回来')) {
-    //访问签到页面
+    writeLog("登录成功");
+    //访问签到页面，获取签到状态
     $res = curlGet($signPageUrl, true, true);
     //根据签到页面上的文字来判断今天是否已经签到
     if (strpos($res, '您今天已经签到过了或者签到时间还未开始')) {
         $resultStr = "今天已签过到\r\n";
+        writeLog("今天已签过到，跳过");
     } else {
         //获取formhash验证串
         $formhash = getFormhash($res);
@@ -101,13 +129,14 @@ if (strpos($res, '欢迎您回来')) {
         $res = curlGet($signSubmitUrl, true, true, null, $post_data);
         if (strpos($res, '签到成功')) {
             $resultStr = "签到成功\r\n";
+            writeLog("签到成功");
         } else {
             $resultStr = "签到失败\r\n";
+            writeLog("签到失败，响应内容片段：" . mb_substr(strip_tags($res), 0, 200));
         }
     }
 } else {
     $resultStr = "登陆失败\r\n";
+    writeLog("登录失败，响应内容片段：" . mb_substr(strip_tags($res), 0, 200));
 }
-
-echo $resultStr;
-unlink($cookie_file); //删除cookie文件
+cleanupCookieFile();
