@@ -7,7 +7,9 @@ $logDir = __DIR__ . '/runtime';
 if (!is_dir($logDir)) {
     mkdir($logDir, 0755, true);
 }
-$logFile = $logDir . '/' . date('Y-m-d') . '.log';
+
+// 单文件日志
+$logFile = $logDir . '/' . 'discuz_sign.log';
 
 function writeLog(string $message)
 {
