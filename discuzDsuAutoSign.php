@@ -10,12 +10,72 @@ if (!is_dir($logDir)) {
 
 // 单文件日志
 $logFile = $logDir . '/' . 'discuz_sign.log';
+// 设置为上海时区，避免日志时间与实际时间不符
+date_default_timezone_set('Asia/Shanghai');
 
 function writeLog(string $message)
 {
     global $logFile;
     $line = '[' . date('Y-m-d H:i:s') . '] ' . $message . PHP_EOL;
     file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
+}
+
+function getSignStatusField(string $user): string
+{
+    $normalizedUser = preg_replace('/[^a-zA-Z0-9_-]/', '_', $user);
+    if ($normalizedUser === null || $normalizedUser === '') {
+        $normalizedUser = 'unknown_user';
+    }
+    return 'sign_status_' . $normalizedUser;
+}
+
+function loadSignStatus(string $statusFile): array
+{
+    if (!file_exists($statusFile)) {
+        return array();
+    }
+
+    $raw = file_get_contents($statusFile);
+    if ($raw === false || trim($raw) === '') {
+        return array();
+    }
+
+    $decoded = json_decode($raw, true);
+    if (!is_array($decoded)) {
+        writeLog("签到状态文件解析失败，将重置：{$statusFile}");
+        return array();
+    }
+
+    return $decoded;
+}
+
+function saveSignStatus(string $statusFile, array $status): bool
+{
+    $json = json_encode($status, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    if ($json === false) {
+        writeLog('签到状态编码失败，未写入状态文件');
+        return false;
+    }
+
+    return file_put_contents($statusFile, $json . PHP_EOL, LOCK_EX) !== false;
+}
+
+function markSignedToday(string $statusFile, string $statusField, string $today, string $message): void
+{
+    $status = loadSignStatus($statusFile);
+    if (!isset($status[$statusField]) || !is_array($status[$statusField])) {
+        $status[$statusField] = array();
+    }
+
+    $status[$statusField][$today] = array(
+        'signed' => true,
+        'message' => $message,
+        'signed_at' => date('Y-m-d H:i:s'),
+    );
+
+    if (!saveSignStatus($statusFile, $status)) {
+        writeLog("签到状态写入失败：{$statusFile}");
+    }
 }
 
 function curlGet(string $url, bool $use = false, bool $save = false, ?string $referer = null, ?array $post_data = null)
@@ -74,8 +134,13 @@ $signPageUrl = $baseUrl . 'plugin.php?id=dsu_paulsign:sign';
 //签到信息提交地址
 $signSubmitUrl = $baseUrl . 'plugin.php?id=dsu_paulsign:sign&operation=qiandao&infloat=0&inajax=0';
 
+//本地签到状态文件
+$statusFile = $logDir . '/discuz_sign_status.json';
+$statusField = getSignStatusField($user);
+$today = date('Y-m-d');
+
 //存放Cookies的文件
-$cookie_file = tempnam($logDir, 'cookie');
+$cookie_file = '';
 
 function cleanupCookieFile()
 {
@@ -90,6 +155,22 @@ function cleanupCookieFile()
 register_shutdown_function('cleanupCookieFile');
 
 writeLog("开始执行签到，用户：{$user}，论坛：{$baseUrl}");
+
+$signStatus = loadSignStatus($statusFile);
+if (
+    isset($signStatus[$statusField][$today])
+    && is_array($signStatus[$statusField][$today])
+    && !empty($signStatus[$statusField][$today]['signed'])
+) {
+    writeLog("本地状态检查：{$today} 已签到，跳过本次执行");
+    exit(0);
+}
+
+$cookie_file = tempnam($logDir, 'cookie');
+if ($cookie_file === false) {
+    writeLog('创建cookie文件失败，脚本终止');
+    exit(1);
+}
 
 //访问论坛登录页面，保存Cookies
 $res = curlGet($loginPageUrl, false, true);
@@ -116,6 +197,7 @@ if (strpos($res, '欢迎您回来')) {
     if (strpos($res, '您今天已经签到过了或者签到时间还未开始')) {
         $resultStr = "今天已签过到\r\n";
         writeLog("今天已签过到，跳过");
+        markSignedToday($statusFile, $statusField, $today, 'forum_already_signed');
     } else {
         //获取formhash验证串
         $formhash = getFormhash($res);
@@ -132,6 +214,7 @@ if (strpos($res, '欢迎您回来')) {
         if (strpos($res, '签到成功')) {
             $resultStr = "签到成功\r\n";
             writeLog("签到成功");
+            markSignedToday($statusFile, $statusField, $today, 'sign_success');
         } else {
             $resultStr = "签到失败\r\n";
             writeLog("签到失败，响应内容片段：" . mb_substr(strip_tags($res), 0, 200));
