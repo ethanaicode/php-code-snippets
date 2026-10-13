@@ -2,6 +2,17 @@
 // 针对的是DSU每日签到插件，路径是plugin.php?id=dsu_paulsign:sign，论坛一般用的都是这个插件
 // 推荐每日零点执行一次签到脚本 
 // 0 0 * * * php /path/to/your/script/discuzDsuAutoSign.php
+// 参数 --mode=sign(仅签到) | miner(仅领取矿工收益) | all(两者都执行，默认)
+// 例：php discuzDsuAutoSign.php --mode=miner
+
+$opts = getopt('', array('mode::'));
+$mode = isset($opts['mode']) && is_string($opts['mode']) ? strtolower($opts['mode']) : 'all';
+if (!in_array($mode, array('sign', 'miner', 'all'), true)) {
+    fwrite(STDERR, "无效的 --mode 参数：{$mode}，可选 sign|miner|all\n");
+    exit(2);
+}
+$doSign = $mode !== 'miner';
+$doMiner = $mode !== 'sign';
 
 $logDir = __DIR__ . '/runtime';
 if (!is_dir($logDir)) {
@@ -134,6 +145,10 @@ $signPageUrl = $baseUrl . 'plugin.php?id=dsu_paulsign:sign';
 //签到信息提交地址
 $signSubmitUrl = $baseUrl . 'plugin.php?id=dsu_paulsign:sign&operation=qiandao&infloat=0&inajax=0';
 
+//矿工页面地址与领取收益提交地址
+$minerPageUrl = $baseUrl . 'miner-miner.html';
+$minerGetOutputUrl = $baseUrl . 'plugin.php?id=miner:misc&action=getoutput';
+
 //本地签到状态文件
 $statusFile = $logDir . '/discuz_sign_status.json';
 $statusField = getSignStatusField($user);
@@ -154,15 +169,20 @@ function cleanupCookieFile()
 // 注册脚本结束时的清理函数，确保cookie文件被删除
 register_shutdown_function('cleanupCookieFile');
 
-writeLog("开始执行签到，用户：{$user}，论坛：{$baseUrl}");
+writeLog("开始执行，模式：{$mode}，用户：{$user}，论坛：{$baseUrl}");
 
-$signStatus = loadSignStatus($statusFile);
-if (
-    isset($signStatus[$statusField][$today])
-    && is_array($signStatus[$statusField][$today])
-    && !empty($signStatus[$statusField][$today]['signed'])
-) {
-    writeLog("本地状态检查：{$today} 已签到，跳过本次执行");
+if ($doSign) {
+    $signStatus = loadSignStatus($statusFile);
+    if (
+        isset($signStatus[$statusField][$today])
+        && is_array($signStatus[$statusField][$today])
+        && !empty($signStatus[$statusField][$today]['signed'])
+    ) {
+        writeLog("本地状态检查：{$today} 已签到，跳过签到");
+        $doSign = false;
+    }
+}
+if (!$doSign && !$doMiner) {
     exit(0);
 }
 
@@ -191,6 +211,7 @@ $login_array = array(
 $res = curlGet($loginSubmitUrl, true, true, null, $login_array);
 if (strpos($res, '欢迎您回来')) {
     writeLog("登录成功");
+    if ($doSign) {
     //访问签到页面，获取签到状态
     $res = curlGet($signPageUrl, true, true);
     //根据签到页面上的文字来判断今天是否已经签到
@@ -218,6 +239,22 @@ if (strpos($res, '欢迎您回来')) {
         } else {
             $resultStr = "签到失败\r\n";
             writeLog("签到失败，响应内容片段：" . mb_substr(strip_tags($res), 0, 200));
+        }
+    }
+    }
+
+    if ($doMiner) {
+        //访问矿工页面获取formhash，再提交领取收益
+        $res = curlGet($minerPageUrl, true, true);
+        if (preg_match('/name="formhash" value="(.*?)"/i', $res, $matches)) {
+            $res = curlGet($minerGetOutputUrl, true, true, $minerPageUrl, array('formhash' => $matches[1], 'getoutputsubmit' => 'true'));
+            // Discuz 提示页的结果文字位于 id="messagetext" 的 <p> 中
+            $msg = preg_match('/id="messagetext"[^>]*>\s*<p>(.*?)<\/p>/is', (string)$res, $m)
+                ? trim(preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags($m[1]), ENT_QUOTES | ENT_HTML5, 'UTF-8')))
+                : '未识别到提示信息';
+            writeLog("领取矿工收益结果：{$msg}");
+        } else {
+            writeLog('矿工页面未找到formhash，跳过领取矿工收益');
         }
     }
 } else {
